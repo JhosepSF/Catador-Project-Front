@@ -1,9 +1,10 @@
 // src/lib/sync.ts
 import NetInfo from '@react-native-community/netinfo';
+import * as Location from 'expo-location';
 import { db } from './db';
 
-const BASE_URL = 'http://TU_IP:8000';          // <-- cámbialo
-const TOKEN: string | null = null;             // o léelo de SecureStore si lo tendrás
+const BASE_URL = 'http://127.0.0.1:8000';          
+const TOKEN: string | null = null;         
 
 type PendingOp = {
   id: number;
@@ -19,6 +20,76 @@ type FileRow = {
   local_uri: string;
   filename: string;
 };
+
+type RecordRow = {
+  client_uuid: string;
+  payload: string; // JSON string
+};
+
+/** Completa dirección (region/provincia/distrito/direccion) en records 'pending'
+ *  cuando hay lat/lng y falta alguno de esos campos. También asegura mapsUrl.
+ *  Actualiza tanto la tabla records.payload como el body del create en pending_ops.
+ */
+async function preEnrichPendingRecords() {
+  const net = await NetInfo.fetch();
+  if (!net.isConnected || net.isInternetReachable === false) return;
+
+  const recs = db.getAllSync(
+    `SELECT client_uuid, payload FROM records WHERE sync_status='pending'`
+  ) as RecordRow[];
+
+  for (const r of recs) {
+    try {
+      const data = JSON.parse(r.payload) as any;
+      const dp = data?.datos_personales ?? {};
+      const hasLatLng = typeof dp.lat === 'number' && typeof dp.lng === 'number';
+
+      const missingAddr =
+        !dp?.direccion || !dp?.region || !dp?.provincia || !dp?.distrito;
+      const missingMaps = !dp?.mapsUrl;
+
+      if (!hasLatLng || (!missingAddr && !missingMaps)) continue;
+
+      const [addr] = await Location.reverseGeocodeAsync({
+        latitude: dp.lat,
+        longitude: dp.lng,
+      });
+
+      const newDp = {
+        ...dp,
+        region: dp.region || addr?.region || '',
+        provincia: dp.provincia || addr?.city || addr?.subregion || '',
+        distrito: dp.distrito || addr?.district || '',
+        direccion:
+          dp.direccion ||
+          [addr?.street, addr?.name, addr?.postalCode].filter(Boolean).join(' '),
+        mapsUrl: dp.mapsUrl || `https://www.google.com/maps?q=${dp.lat},${dp.lng}`,
+      };
+
+      const newPayloadObj = { ...data, datos_personales: newDp };
+      const newPayload = JSON.stringify(newPayloadObj);
+      const now = new Date().toISOString();
+
+      db.withTransactionSync(() => {
+        // Actualiza la fila de records
+        db.runSync(
+          `UPDATE records SET payload=?, updated_at=? WHERE client_uuid=?`,
+          [newPayload, now, r.client_uuid]
+        );
+
+        // Actualiza el body del create correspondiente en pending_ops
+        db.runSync(
+          `UPDATE pending_ops
+             SET body=?
+           WHERE client_uuid=? AND endpoint='/api/mucosa/registro' AND method='POST'`,
+          [JSON.stringify({ client_uuid: r.client_uuid, ...newPayloadObj, updated_at: now }), r.client_uuid]
+        );
+      });
+    } catch {
+      // ignoramos errores de parseo o geocoding; se intentará luego
+    }
+  }
+}
 
 async function uploadFile(
   endpoint: string,
@@ -46,7 +117,10 @@ export async function trySync() {
   // isInternetReachable puede ser null: solo seguimos si es true
   if (!net.isConnected || net.isInternetReachable === false) return;
 
-  // lee un batch de operaciones pendientes
+  // 1) Completa dirección/mapa si es posible antes de empujar
+  await preEnrichPendingRecords();
+
+  // 2) Lee un batch de operaciones pendientes
   const ops = db.getAllSync(
     `SELECT id,client_uuid,endpoint,method,body,form_field,file_id
      FROM pending_ops

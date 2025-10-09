@@ -1,18 +1,12 @@
 // src/screens/RegistroNuevoScreen.tsx
 import React, { useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  Image,
-  Alert,
-  ScrollView,
-  TextInputProps,
+  View, Text, StyleSheet, TextInput, TouchableOpacity, Image, Alert,
+  ScrollView, TextInputProps,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
+import NetInfo from '@react-native-community/netinfo';
 import { Ionicons } from '@expo/vector-icons';
 import { saveRegistroNuevoOffline } from '../libs/outbox';
 
@@ -28,124 +22,120 @@ type DatosPersonales = {
   distrito: string;
   direccion: string;
   mapsUrl: string;
+  lat?: number;
+  lng?: number;
 };
 
 type DatosObstetricos = {
-  pulsaciones: string;        // por minuto
-  hemoglobina: string;        // g/dL
-  oxigeno: string;            // %
-  fechaUltimoPeriodo: string; // YYYY-MM-DD
-  semanasEmbarazo: number;    // calculado
+  pulsaciones: string;
+  hemoglobina: string;
+  oxigeno: string;
+  fechaUltimoPeriodo: string;
+  semanasEmbarazo: number;
 };
 
 export default function RegistroNuevoScreen() {
-  const [nroVisita, setNroVisita] = useState('1'); // por defecto Visita 1
+  const [nroVisita, setNroVisita] = useState('1');
   const [dp, setDp] = useState<DatosPersonales>({
-    dni: '',
-    nombre: '',
-    apellido: '',
-    edad: '',
-    region: '',
-    provincia: '',
-    distrito: '',
-    direccion: '',
-    mapsUrl: '',
+    dni: '', nombre: '', apellido: '', edad: '',
+    region: '', provincia: '', distrito: '', direccion: '', mapsUrl: '',
+    lat: undefined, lng: undefined,
   });
   const [do_, setDo] = useState<DatosObstetricos>({
-    pulsaciones: '',
-    hemoglobina: '',
-    oxigeno: '',
-    fechaUltimoPeriodo: '',
-    semanasEmbarazo: 0,
+    pulsaciones: '', hemoglobina: '', oxigeno: '', fechaUltimoPeriodo: '', semanasEmbarazo: 0,
   });
-
   const [fotosConjuntiva, setFotosConjuntiva] = useState<Foto[]>([]);
   const [fotosLabio, setFotosLabio] = useState<Foto[]>([]);
 
-  // ---- helpers ----
   const calcularSemanas = (fechaISO: string) => {
     if (!fechaISO) return 0;
     const d0 = new Date(fechaISO + 'T00:00:00');
     if (isNaN(d0.getTime())) return 0;
-    const hoy = new Date();
-    const diffMs = hoy.getTime() - d0.getTime();
-    const sem = Math.floor(diffMs / (1000 * 60 * 60 * 24 * 7));
-    return Math.max(sem, 0);
+    const diffMs = Date.now() - d0.getTime();
+    return Math.max(Math.floor(diffMs / (1000 * 60 * 60 * 24 * 7)), 0);
   };
-
   const semanasEmbarazoCalc = useMemo(
     () => calcularSemanas(do_.fechaUltimoPeriodo),
     [do_.fechaUltimoPeriodo]
   );
 
-  const updateFechaUltimoPeriodo = (v: string) => {
-    setDo(s => ({ ...s, fechaUltimoPeriodo: v }));
-  };
+  const updateFechaUltimoPeriodo = (v: string) => setDo(s => ({ ...s, fechaUltimoPeriodo: v }));
 
-  const onPickFoto = async (
-    tipo: 'Conjuntiva' | 'Labio',
-    from: 'camera' | 'gallery'
-  ) => {
+  const onPickFoto = async (tipo: 'Conjuntiva' | 'Labio', from: 'camera' | 'gallery') => {
     try {
       if (from === 'camera') {
-        const res = await ImagePicker.launchCameraAsync({
-          allowsEditing: false,
-          quality: 0.8,
-        });
+        const res = await ImagePicker.launchCameraAsync({ allowsEditing: false, quality: 0.8 });
         if (!res.canceled && res.assets?.length) {
           const nuevas = res.assets.map(a => ({ uri: a.uri }));
-          if (tipo === 'Conjuntiva') setFotosConjuntiva(prev => [...prev, ...nuevas]);
-          else setFotosLabio(prev => [...prev, ...nuevas]);
+          if (tipo === 'Conjuntiva') setFotosConjuntiva(p => [...p, ...nuevas]); else setFotosLabio(p => [...p, ...nuevas]);
         }
       } else {
-        // allowsMultipleSelection no está tipado en RN; lo marcamos como any
         const res = await ImagePicker.launchImageLibraryAsync({
-          allowsEditing: false,
-          quality: 0.8,
-          allowsMultipleSelection: true,
-          selectionLimit: 10,
+          allowsEditing: false, quality: 0.8, allowsMultipleSelection: true, selectionLimit: 10,
         } as any);
         if (!res.canceled && res.assets?.length) {
           const nuevas = res.assets.map(a => ({ uri: a.uri }));
-          if (tipo === 'Conjuntiva') setFotosConjuntiva(prev => [...prev, ...nuevas]);
-          else setFotosLabio(prev => [...prev, ...nuevas]);
+          if (tipo === 'Conjuntiva') setFotosConjuntiva(p => [...p, ...nuevas]); else setFotosLabio(p => [...p, ...nuevas]);
         }
       }
-    } catch (e) {
+    } catch {
       Alert.alert('Error', 'No se pudo seleccionar/tomar la foto.');
     }
   };
 
-  const obtenerUbicacion = async () => {
+  /** Captura GPS SIEMPRE (offline o online) y genera el Maps URL localmente */
+  const capturarGps = async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Permiso denegado', 'No se otorgó permiso de ubicación.');
+        Alert.alert('Permiso denegado', 'Se requiere permiso de ubicación.');
         return;
       }
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const { latitude, longitude } = loc.coords;
+      const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`; // se puede generar sin red
 
-      // link de Google Maps
-      const mapsUrl = `https://www.google.com/maps?q=${latitude},${longitude}`;
+      setDp(s => ({ ...s, lat: latitude, lng: longitude, mapsUrl }));
+      Alert.alert('GPS guardado', 'Coordenadas y link de Maps listos. La dirección se completará con Internet.');
+    } catch {
+      Alert.alert('Error', 'No se pudo obtener la ubicación.');
+    }
+  };
 
-      // reverse geocode para rellenar (lo que se pueda)
-      const [addr] = await Location.reverseGeocodeAsync({ latitude, longitude });
+  /** Completa dirección vía reverse geocoding (requiere Internet). Usa dp.lat/lng si ya existen; de lo contrario, toma posición. */
+  const completarDireccion = async () => {
+    try {
+      const net = await NetInfo.fetch();
+      if (!net.isConnected || net.isInternetReachable === false) {
+        Alert.alert('Sin Internet', 'Conéctate para completar la dirección automáticamente.');
+        return;
+      }
+
+      let lat = dp.lat, lng = dp.lng;
+      if (lat == null || lng == null) {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return Alert.alert('Permiso denegado', 'Se requiere permiso de ubicación.');
+        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        lat = loc.coords.latitude; lng = loc.coords.longitude;
+        setDp(s => ({ ...s, lat, lng, mapsUrl: `https://www.google.com/maps?q=${lat},${lng}` }));
+      }
+
+      const [addr] = await Location.reverseGeocodeAsync({ latitude: lat!, longitude: lng! });
       setDp(s => ({
         ...s,
         region: addr?.region ?? s.region,
         provincia: addr?.city ?? addr?.subregion ?? s.provincia,
         distrito: addr?.district ?? s.distrito,
         direccion: [addr?.street, addr?.name, addr?.postalCode].filter(Boolean).join(' ') || s.direccion,
-        mapsUrl,
+        mapsUrl: s.mapsUrl || `https://www.google.com/maps?q=${lat},${lng}`,
       }));
-    } catch (e) {
-      Alert.alert('Error', 'No se pudo obtener la ubicación.');
+      Alert.alert('Listo', 'Dirección completada.');
+    } catch {
+      Alert.alert('Error', 'No se pudo completar la dirección.');
     }
   };
 
   const guardarRegistro = async () => {
-    // validaciones mínimas
     if (!dp.dni) return Alert.alert('Falta DNI', 'Ingresa el DNI.');
     if (!nroVisita) return Alert.alert('Falta Visita', 'Ingresa el número de visita.');
     if (!fotosConjuntiva.length && !fotosLabio.length) {
@@ -153,7 +143,6 @@ export default function RegistroNuevoScreen() {
     }
 
     try {
-      // Guarda OFFLINE y encola para sync
       await saveRegistroNuevoOffline(
         dp,
         { ...do_, semanasEmbarazo: semanasEmbarazoCalc },
@@ -161,13 +150,8 @@ export default function RegistroNuevoScreen() {
         fotosConjuntiva,
         fotosLabio
       );
-
-      Alert.alert('Guardado', 'Registro almacenado localmente y encolado para sincronizar.');
-      // reset suave
-      setFotosConjuntiva([]);
-      setFotosLabio([]);
-      // si quieres limpiar datos:
-      // setDp({ ...dp, nombre:'', apellido:'', edad:'', direccion:'', mapsUrl:'' });
+      Alert.alert('Guardado', 'Registro almacenado y encolado para sincronizar.');
+      setFotosConjuntiva([]); setFotosLabio([]);
     } catch (e) {
       console.error(e);
       Alert.alert('Error', 'No se pudo guardar localmente.');
@@ -178,7 +162,6 @@ export default function RegistroNuevoScreen() {
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.h1}>Nuevo registro</Text>
 
-      {/* Datos Personales */}
       <Text style={styles.h2}>Datos Personales</Text>
       <Input label="DNI" value={dp.dni} onChangeText={(v: string) => setDp(s => ({ ...s, dni: v }))} keyboardType="number-pad" />
       <Input label="Nombre" value={dp.nombre} onChangeText={(v: string) => setDp(s => ({ ...s, nombre: v }))} />
@@ -189,12 +172,18 @@ export default function RegistroNuevoScreen() {
       <Input label="Distrito" value={dp.distrito} onChangeText={(v: string) => setDp(s => ({ ...s, distrito: v }))} />
       <Input label="Dirección" value={dp.direccion} onChangeText={(v: string) => setDp(s => ({ ...s, direccion: v }))} />
       <Input label="Maps URL" value={dp.mapsUrl} onChangeText={(v: string) => setDp(s => ({ ...s, mapsUrl: v }))} placeholder="https://www.google.com/maps?q=lat,lng" />
-      <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={obtenerUbicacion}>
-        <Ionicons name="navigate" size={18} color="#fff" />
-        <Text style={styles.btnText}> Obtener ubicación y generar link</Text>
-      </TouchableOpacity>
 
-      {/* Datos Obstétricos */}
+      <View style={{ flexDirection: 'row', gap: 10 }}>
+        <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={capturarGps}>
+          <Ionicons name="navigate" size={18} color="#fff" />
+          <Text style={styles.btnText}> Capturar GPS (offline)</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={completarDireccion}>
+          <Ionicons name="earth" size={18} color="#fff" />
+          <Text style={styles.btnText}> Completar dirección</Text>
+        </TouchableOpacity>
+      </View>
+
       <Text style={styles.h2}>Datos Obstétricos</Text>
       <Input label="Pulsaciones por minuto" value={do_.pulsaciones} onChangeText={(v: string) => setDo(s => ({ ...s, pulsaciones: v }))} keyboardType="number-pad" />
       <Input label="Hemoglobina (g/dL)" value={do_.hemoglobina} onChangeText={(v: string) => setDo(s => ({ ...s, hemoglobina: v }))} keyboardType="decimal-pad" />
@@ -202,10 +191,8 @@ export default function RegistroNuevoScreen() {
       <Input label="Fecha del último periodo (YYYY-MM-DD)" value={do_.fechaUltimoPeriodo} onChangeText={updateFechaUltimoPeriodo} />
       <Text style={styles.calcText}>Semanas de embarazo (auto): <Text style={{ color: '#fff', fontWeight: '800' }}>{semanasEmbarazoCalc}</Text></Text>
 
-      {/* Visita */}
       <Input label="N° de visita" value={nroVisita} onChangeText={(v: string) => setNroVisita(v)} keyboardType="number-pad" />
 
-      {/* Fotos */}
       <Text style={styles.h2}>Fotos</Text>
       <Text style={styles.h3}>Conjuntiva</Text>
       <Row>
@@ -230,21 +217,13 @@ export default function RegistroNuevoScreen() {
 
 /** UI helpers tipados */
 type InputProps = {
-  label: string;
-  value?: string;
-  onChangeText?: (text: string) => void;
+  label: string; value?: string; onChangeText?: (text: string) => void;
 } & Omit<TextInputProps, 'value' | 'onChangeText'>;
 
 const Input: React.FC<InputProps> = ({ label, value, onChangeText, ...rest }) => (
   <View style={{ marginBottom: 10 }}>
     <Text style={styles.label}>{label}</Text>
-    <TextInput
-      value={value}
-      onChangeText={onChangeText}
-      placeholderTextColor="#99a"
-      {...rest}
-      style={styles.input}
-    />
+    <TextInput value={value} onChangeText={onChangeText} placeholderTextColor="#99a" {...rest} style={styles.input} />
   </View>
 );
 
@@ -262,9 +241,7 @@ const SmallBtn: React.FC<SmallBtnProps> = ({ color, icon, text, onPress }) => (
 
 const PreviewGrid: React.FC<{ fotos: Foto[] }> = ({ fotos }) => (
   <View style={styles.previewGrid}>
-    {fotos.map((f, i) => (
-      <Image key={i} source={{ uri: f.uri }} style={styles.thumb} />
-    ))}
+    {fotos.map((f, i) => <Image key={i} source={{ uri: f.uri }} style={styles.thumb} />)}
   </View>
 );
 
@@ -275,23 +252,11 @@ const styles = StyleSheet.create({
   h3: { color: '#cfd3ff', fontWeight: '700', marginTop: 6 },
   label: { color: '#aab' },
   input: {
-    backgroundColor: '#1a2033',
-    color: '#fff',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: '#2c3350',
+    backgroundColor: '#1a2033', color: '#fff', borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: '#2c3350',
   },
   calcText: { color: '#aab', marginBottom: 6, marginTop: -4 },
-  btn: {
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderRadius: 12,
-    marginTop: 10,
-    flexDirection: 'row',
-    justifyContent: 'center',
-  },
+  btn: { alignItems: 'center', paddingVertical: 12, borderRadius: 12, marginTop: 10, flexDirection: 'row', justifyContent: 'center' },
   btnText: { color: '#fff', fontWeight: '700' },
   btnSecondary: { backgroundColor: '#3949ab' },
   smallBtn: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 14, borderRadius: 10 },
