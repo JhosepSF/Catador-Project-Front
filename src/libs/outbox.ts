@@ -1,4 +1,3 @@
-import 'react-native-get-random-values';
 import uuid from 'react-native-uuid';
 import { db } from './db';
 import { moveIntoAppDir, buildPhotoName, buildPhotoDst } from './fs';
