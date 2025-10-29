@@ -24,9 +24,12 @@ export const ChocolateAssessmentScreen: React.FC = () => {
 
   const handleSubmit = async () => {
     try {
+      console.log('[UI] Enviando assessmentData =', assessmentData); // <= LOG A
       const result = await chocolateAssessmentService.submitAssessment(assessmentData);
+      console.log('[UI] Result =', result); // <= LOG B
       navigation.navigate('AssessmentResult', { result });
-    } catch (error) {
+    } catch (error: any) {
+      console.log('[UI] Error submitAssessment =', error?.message || error); // <= LOG C
       Alert.alert('Error', 'No se pudo procesar la evaluación');
     }
   };

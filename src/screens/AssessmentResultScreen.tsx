@@ -53,15 +53,6 @@ export const AssessmentResultScreen: React.FC = () => {
           <Text style={styles.scoreText}>Puntaje: {result.score}/100</Text>
         </View>
 
-        <View style={styles.recommendationsContainer}>
-          <Text style={styles.sectionTitle}>Recomendaciones:</Text>
-          {result.recommendations.map((recommendation, index) => (
-            <View key={index} style={styles.recommendationItem}>
-              <Text style={styles.recommendationText}>• {recommendation}</Text>
-            </View>
-          ))}
-        </View>
-
         <TouchableOpacity 
           style={styles.newAssessmentButton}
           onPress={() => navigation.navigate('ChocolateAssessment')}
