@@ -5,7 +5,7 @@ import { View, Text, StyleSheet } from 'react-native';
 export default function Footer() {
   return (
     <View style={styles.footer}>
-      <Text style={styles.footerText}>©2025 MUCOSAVIEW</Text>
+      <Text style={styles.footerText}>©2025 CATADOR-IA</Text>
     </View>
   );
 }

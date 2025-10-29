@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "mucosaview-app",
-    "slug": "mucosaview-app",
+    "name": "catador-ia",
+    "slug": "catador-ia",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -36,7 +36,7 @@
         "android.permission.ACCESS_FINE_LOCATION",
         "android.permission.RECORD_AUDIO"
       ],
-      "package": "com.tuorg.mucosaviewapp"
+      "package": "com.tuorg.catadoria"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -54,8 +54,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "9b0960b0-9a7c-4713-a1c9-31190ccdd4f0"
+        "projectId": "2f2d2330-b00c-4de2-9523-800e29738a71"
       }
-    }
+    },
+    "owner": "jhosepe"
   }
 }
