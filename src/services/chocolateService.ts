@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'http://192.168.18.24:8000/api'
+const API_BASE_URL = 'https://catador-project-back.onrender.com/api'
 
 console.log('[API] BASE_URL =', API_BASE_URL); 
 
@@ -18,7 +18,7 @@ export type AssessmentResult = {
 
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000,
+  timeout: 15000,
   headers: { 'Content-Type': 'application/json' },
 });
 
