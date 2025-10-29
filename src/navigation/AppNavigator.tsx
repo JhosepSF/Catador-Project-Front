@@ -6,22 +6,26 @@ import { NavigationContainer } from '@react-navigation/native';
 import CustomHeader from '../components/CustomHeader';
 import Footer from '../components/Footer';
 
-import MenuRegistroScreen from '../screens/MenuRegistroScreen';
-import RegistroNuevoScreen from '../screens/RegistroNuevoScreen';
-import AgregarFotosScreen from '../screens/AgregarFotoScreen';
+import { ChocolateAssessmentScreen } from '../screens/ChocolateAssessmentScreen';
+import { AssessmentResultScreen } from '../screens/AssessmentResultScreen';
+import { RootStackParamList } from '../types/navigation';
 
-const Stack = createNativeStackNavigator();
+const Stack = createNativeStackNavigator<RootStackParamList>();
 
 function AppNavigator() {
   return (
     <NavigationContainer>
       <View style={styles.appContainer}>
-        <CustomHeader title="MucosaView" subtitle="Recoleccion" />
+        <CustomHeader title="Catador de Cacao" subtitle="Evaluación de Calidad" />
         <View style={styles.content}>
-          <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName="MenuRegistro">
-            <Stack.Screen name="MenuRegistro" component={MenuRegistroScreen} />
-            <Stack.Screen name="RegistroNuevo" component={RegistroNuevoScreen} />
-            <Stack.Screen name="AgregarFotos" component={AgregarFotosScreen} />
+          <Stack.Navigator 
+            screenOptions={{ 
+              headerShown: false,
+            }} 
+            initialRouteName="ChocolateAssessment"
+          >
+            <Stack.Screen name="ChocolateAssessment" component={ChocolateAssessmentScreen} />
+            <Stack.Screen name="AssessmentResult" component={AssessmentResultScreen} />
           </Stack.Navigator>
         </View>
         <Footer />

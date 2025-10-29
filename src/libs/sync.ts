@@ -3,8 +3,12 @@ import NetInfo from '@react-native-community/netinfo';
 import * as Location from 'expo-location';
 import { db } from './db';
 
-const BASE_URL = 'http://127.0.0.1:8000';          
-const TOKEN: string | null = null;         
+const DEBUG_SYNC = true;
+const D = (...a: any[]) => DEBUG_SYNC && console.log(...a);
+
+const BASE_URL = 'http://192.168.18.25:8000'; // <-- tu LAN IP
+const TOKEN: string | null = null;
+const MAX_RETRIES = 8;
 
 type PendingOp = {
   id: number;
@@ -14,24 +18,37 @@ type PendingOp = {
   body: string | null;
   form_field: string | null;
   file_id: number | null;
+  retries?: number;
 };
 
 type FileRow = {
   local_uri: string;
   filename: string;
+  tipo: 'Conjuntiva' | 'Labio';
+  visita: number;
 };
 
 type RecordRow = {
   client_uuid: string;
-  payload: string; // JSON string
+  payload: string;
 };
 
-/** Completa dirección (region/provincia/distrito/direccion) en records 'pending'
- *  cuando hay lat/lng y falta alguno de esos campos. También asegura mapsUrl.
- *  Actualiza tanto la tabla records.payload como el body del create en pending_ops.
- */
+// --- util: ping host ---
+async function hostCheck() {
+  try {
+    const res = await fetch(BASE_URL, { method: 'GET' });
+    const txt = await res.clone().text();
+    D('[NET][RES]', { status: res.status, url: BASE_URL, ok: res.ok, bodyPreview: txt.slice(0, 120) });
+    D('[SYNC] Host OK:', BASE_URL);
+  } catch (e: any) {
+    D('[SYNC][HOST][ERR]', e?.message || e);
+  }
+}
+
+// --- completa dirección antes de empujar ---
 async function preEnrichPendingRecords() {
   const net = await NetInfo.fetch();
+  D('[NETINFO][preEnrich]', net);
   if (!net.isConnected || net.isInternetReachable === false) return;
 
   const recs = db.getAllSync(
@@ -43,41 +60,32 @@ async function preEnrichPendingRecords() {
       const data = JSON.parse(r.payload) as any;
       const dp = data?.datos_personales ?? {};
       const hasLatLng = typeof dp.lat === 'number' && typeof dp.lng === 'number';
-
-      const missingAddr =
-        !dp?.direccion || !dp?.region || !dp?.provincia || !dp?.distrito;
+      const missingAddr = !dp?.direccion || !dp?.region || !dp?.provincia || !dp?.distrito;
       const missingMaps = !dp?.mapsUrl;
-
       if (!hasLatLng || (!missingAddr && !missingMaps)) continue;
 
-      const [addr] = await Location.reverseGeocodeAsync({
-        latitude: dp.lat,
-        longitude: dp.lng,
-      });
-
+      const [addr] = await Location.reverseGeocodeAsync({ latitude: dp.lat, longitude: dp.lng });
       const newDp = {
         ...dp,
         region: dp.region || addr?.region || '',
         provincia: dp.provincia || addr?.city || addr?.subregion || '',
         distrito: dp.distrito || addr?.district || '',
         direccion:
-          dp.direccion ||
-          [addr?.street, addr?.name, addr?.postalCode].filter(Boolean).join(' '),
+          dp.direccion || [addr?.street, addr?.name, addr?.postalCode].filter(Boolean).join(' '),
         mapsUrl: dp.mapsUrl || `https://www.google.com/maps?q=${dp.lat},${dp.lng}`,
       };
+
+      D('[SYNC] Enrich record (reverse geocode)', { client_uuid: r.client_uuid, before: dp, after: newDp });
 
       const newPayloadObj = { ...data, datos_personales: newDp };
       const newPayload = JSON.stringify(newPayloadObj);
       const now = new Date().toISOString();
 
       db.withTransactionSync(() => {
-        // Actualiza la fila de records
         db.runSync(
           `UPDATE records SET payload=?, updated_at=? WHERE client_uuid=?`,
           [newPayload, now, r.client_uuid]
         );
-
-        // Actualiza el body del create correspondiente en pending_ops
         db.runSync(
           `UPDATE pending_ops
              SET body=?
@@ -86,118 +94,234 @@ async function preEnrichPendingRecords() {
         );
       });
     } catch {
-      // ignoramos errores de parseo o geocoding; se intentará luego
+      // ignore
     }
   }
 }
 
+// --- mapeo tipo humano -> código backend ---
+function mapTipoToCode(tipo: string): 'CONJ' | 'LAB' {
+  return (tipo || '').toUpperCase().startsWith('CONJ') ? 'CONJ' : 'LAB';
+}
+
+// --- subida de archivo: incluye type + nro_visita ---
 async function uploadFile(
   endpoint: string,
   field: string,
   fileUri: string,
   filename: string,
-  client_uuid: string
+  client_uuid: string,
+  tipoCode: 'CONJ' | 'LAB',
+  visita: number
 ) {
+  D('[SYNC] POST multipart', {
+    url: BASE_URL + endpoint,
+    field,
+    filename,
+    client_uuid,
+    tipo: tipoCode,
+    visita,
+  });
+
   const form = new FormData();
   form.append(field, { uri: fileUri, name: filename, type: 'image/jpeg' } as any);
+  form.append('type', tipoCode);                 // requerido por tu backend
+  form.append('nro_visita', String(visita));     // requerido por tu backend
 
   const res = await fetch(BASE_URL + endpoint, {
     method: 'POST',
     headers: {
-      'Idempotency-Key': client_uuid, // opcional
+      'Idempotency-Key': client_uuid,
       ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
     },
     body: form,
   });
-  if (!res.ok) throw new Error('upload failed');
+
+  const preview = await res.clone().text();
+  D('[NET][RES]', {
+    status: res.status,
+    url: BASE_URL + endpoint,
+    ok: res.ok,
+    bodyPreview: preview.substring(0, 300),
+  });
+
+  if (!res.ok) throw new Error(`upload failed status=${res.status}`);
+}
+
+// --- helpers de retries ---
+function bumpRetryOrDrop(opId: number, retries?: number) {
+  const r = retries ?? 0;
+  if (r + 1 >= MAX_RETRIES) {
+    D('[SYNC][RETRY] Max reached, dropping op', opId);
+    db.runSync(`DELETE FROM pending_ops WHERE id=?`, [opId]);
+  } else {
+    db.runSync(`UPDATE pending_ops SET retries=COALESCE(retries,0)+1 WHERE id=?`, [opId]);
+  }
 }
 
 export async function trySync() {
+  await hostCheck();
+
   const net = await NetInfo.fetch();
-  // isInternetReachable puede ser null: solo seguimos si es true
+  D('[NETINFO][trySync]', net);
   if (!net.isConnected || net.isInternetReachable === false) return;
 
-  // 1) Completa dirección/mapa si es posible antes de empujar
   await preEnrichPendingRecords();
 
-  // 2) Lee un batch de operaciones pendientes
-  const ops = db.getAllSync(
-    `SELECT id,client_uuid,endpoint,method,body,form_field,file_id
+  // Lote: JSON primero, FILEs después
+  const all = db.getAllSync(
+    `SELECT id,client_uuid,endpoint,method,body,form_field,file_id,retries
      FROM pending_ops
-     LIMIT 30`
+     ORDER BY id ASC
+     LIMIT 50`
   ) as PendingOp[];
 
-  for (const op of ops) {
+  const jsonOps = all.filter(o => !o.file_id);
+  const fileOps = all.filter(o => !!o.file_id);
+
+  D('[SYNC] Batch pending_ops =', all.length);
+
+  // ========== 1) JSON ==========
+  for (const op of jsonOps) {
     try {
-      if (op.file_id) {
-        // Subida de archivo
-        const row = db.getFirstSync(
-          `SELECT local_uri, filename FROM files WHERE id=?`,
-          [op.file_id]
-        ) as FileRow | null;
+      let bodyObj: any = null;
+      try { bodyObj = op.body ? JSON.parse(op.body) : null; } catch {}
 
-        if (!row) {
-          // no hay fila del archivo, limpia la op
-          db.withTransactionSync(() => {
-            db.runSync(`DELETE FROM pending_ops WHERE id=?`, [op.id]);
-          });
-          continue;
-        }
+      // Clasifica el tipo de JSON: create o visita
+      const isCreate = op.endpoint === '/api/mucosa/registro';
+      const isVisita = /\/api\/mucosa\/registro\/[^/]+\/visita$/.test(op.endpoint);
 
-        try {
-          await uploadFile(
-            op.endpoint,
-            op.form_field || 'file',
-            row.local_uri,
-            row.filename,
-            op.client_uuid
-          );
+      D('[SYNC] POST JSON (about to send)', {
+        url: BASE_URL + op.endpoint,
+        method: op.method,
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': op.client_uuid },
+        body: bodyObj,
+      });
 
-          db.withTransactionSync(() => {
-            db.runSync(`DELETE FROM pending_ops WHERE id=?`, [op.id]);
-            db.runSync(`UPDATE files SET sync_status='synced' WHERE id=?`, [op.file_id]);
-          });
-        } catch {
-          // fallo de red/servidor: incrementa retries
-          db.withTransactionSync(() => {
-            db.runSync(`UPDATE pending_ops SET retries=retries+1 WHERE id=?`, [op.id]);
-          });
-        }
-      } else {
-        // Crear/actualizar record (JSON)
-        const res = await fetch(BASE_URL + op.endpoint, {
-          method: op.method,
-          headers: {
-            'Content-Type': 'application/json',
-            ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
-            'Idempotency-Key': op.client_uuid,
-          },
-          body: op.body ?? undefined,
-        });
+      const res = await fetch(BASE_URL + op.endpoint, {
+        method: op.method,
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': op.client_uuid,
+          ...(TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {}),
+        },
+        body: op.body ?? undefined,
+      });
 
-        if (res.ok) {
-          db.withTransactionSync(() => {
-            db.runSync(`DELETE FROM pending_ops WHERE id=?`, [op.id]);
+      const preview = await res.clone().text();
+      let json: any = null;
+      try { json = JSON.parse(preview); } catch {}
+
+      D('[NET][RES]', {
+        status: res.status,
+        ok: res.ok,
+        url: BASE_URL + op.endpoint,
+        bodyPreview: json ?? preview.substring(0, 300),
+      });
+
+      // Reglas especiales
+      const alreadyExists =
+        isCreate &&
+        res.status === 400 &&
+        json &&
+        (json.dni?.[0]?.toString()?.toLowerCase()?.includes('already exists') ||
+         json.detail?.toString()?.toLowerCase()?.includes('already exists'));
+
+      // Para /visita, si 404 “No Patient …”, lo dejamos para retry (no lo borramos).
+      if (res.ok || alreadyExists) {
+        db.withTransactionSync(() => {
+          db.runSync(`DELETE FROM pending_ops WHERE id=?`, [op.id]);
+          if (isCreate) {
             db.runSync(`UPDATE records SET sync_status='synced' WHERE client_uuid=?`, [op.client_uuid]);
-          });
-        } else {
-          db.withTransactionSync(() => {
-            db.runSync(`UPDATE pending_ops SET retries=retries+1 WHERE id=?`, [op.id]);
-          });
-        }
+          }
+        });
+      } else {
+        db.withTransactionSync(() => bumpRetryOrDrop(op.id, op.retries));
       }
-    } catch {
-      // no-op; se reintentará en el siguiente ciclo
+    } catch (e: any) {
+      D('[SYNC][JSON][ERR]', e?.message || e);
+      db.withTransactionSync(() => bumpRetryOrDrop(op.id, op.retries));
+    }
+  }
+
+  // ========== 2) FILES ==========
+  for (const op of fileOps) {
+    try {
+      const row = db.getFirstSync(
+        `SELECT local_uri, filename, tipo, visita FROM files WHERE id=?`,
+        [op.file_id]
+      ) as FileRow | null;
+
+      if (!row) {
+        db.withTransactionSync(() => {
+          db.runSync(`DELETE FROM pending_ops WHERE id=?`, [op.id]);
+        });
+        continue;
+      }
+
+      D('[SYNC] Next file', {
+        endpoint: op.endpoint,
+        field: op.form_field || 'file',
+        filename: row.filename,
+        client_uuid: op.client_uuid,
+      });
+
+      try {
+        await uploadFile(
+          op.endpoint,
+          op.form_field || 'file',
+          row.local_uri,
+          row.filename,
+          op.client_uuid,
+          mapTipoToCode(row.tipo),
+          row.visita
+        );
+
+        db.withTransactionSync(() => {
+          db.runSync(`DELETE FROM pending_ops WHERE id=?`, [op.id]);
+          db.runSync(`UPDATE files SET sync_status='synced' WHERE id=?`, [op.file_id]);
+        });
+      } catch (e: any) {
+        D('[SYNC][FILE][ERR]', e?.message || e);
+        db.withTransactionSync(() => bumpRetryOrDrop(op.id, op.retries));
+      }
+    } catch (e: any) {
+      D('[SYNC][LOOP][ERR]', e?.message || e);
+      db.withTransactionSync(() => bumpRetryOrDrop(op.id, op.retries));
     }
   }
 }
 
 export function startAutoSync() {
-  // al recuperar conectividad, intenta sincronizar
   const unsub = NetInfo.addEventListener(state => {
-    if (state.isConnected && state.isInternetReachable) {
-      trySync();
-    }
+    if (state.isConnected && state.isInternetReachable) trySync();
   });
   return unsub;
+}
+
+// Para depurar desde UI (lo puedes mostrar en tu ColaScreen)
+export function debugDumpQueue(limit = 100) {
+  const ops = db.getAllSync(
+    `SELECT p.id, p.client_uuid, p.endpoint, p.method, p.body, p.file_id, p.retries,
+            f.filename, f.tipo, f.visita
+     FROM pending_ops p
+     LEFT JOIN files f ON f.id = p.file_id
+     ORDER BY p.id ASC
+     LIMIT ?`,
+    [limit]
+  ) as any[];
+
+  const normalized = ops.map(op => ({
+    id: op.id,
+    method: op.method,
+    endpoint: op.endpoint,
+    client_uuid: op.client_uuid,
+    retries: op.retries ?? 0,
+    kind: op.file_id ? `FILE(${op.tipo || ''} v${op.visita || ''})` : 'JSON',
+    filename: op.filename || null,
+    body: (() => { try { return op.body ? JSON.parse(op.body) : null; } catch { return op.body; } })(),
+  }));
+
+  D('[DEBUG QUEUE] pending_ops', normalized);
+  return normalized;
 }
