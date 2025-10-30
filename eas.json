@@ -15,7 +15,10 @@
     },
     "production": {
       "channel": "production",
-      "env": { "EXPO_PUBLIC_API_URL": "https://catador-project-back.onrender.com/api" }
+      "env": { "EXPO_PUBLIC_API_URL": "https://catador-project-back.onrender.com/api" },
+      "android": {
+        "buildType": "apk"  
+      }
     }
   },
   "submit": {
