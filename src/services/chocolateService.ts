@@ -41,12 +41,6 @@ export type AssessmentData = {
   purity: string;
 };
 
-export type AssessmentResult = {
-  grade: 'APTO_CHOCOLATE' | 'NO_APTO' | 'APTO_OTROS_USOS';
-  score: number;
-  recommendations: string[];
-};
-
 // Interceptores (útiles para ver TODO lo que sale/entra)
 api.interceptors.request.use((config) => {
   console.log('[API][REQ]', config.method?.toUpperCase(), config.url, 'data=', config.data);
@@ -67,17 +61,31 @@ api.interceptors.response.use(
   }
 );
 
+export type AssessmentResult = {
+  grade: 'APTO_CHOCOLATE' | 'NO_APTO';
+  score: number;
+};
+
+const THRESHOLD = 50; // ← corte para NO_APTO
+
 export const chocolateAssessmentService = {
   async submitAssessment(data: AssessmentData): Promise<AssessmentResult> {
-    console.log('[Service] submitAssessment payload =', data); // <= LOG 3
+    console.log('[Service] submitAssessment payload =', data);
     const response = await api.post('/predict/', data);
-    console.log('[Service] submitAssessment response =', response.data); // <= LOG 4
+    console.log('[Service] submitAssessment response =', response.data);
 
-    const prediction: number = response.data?.prediction;
+    // Asegurar número
+    const score = Number(response.data?.prediction);
+    if (!Number.isFinite(score)) {
+      throw new Error('Respuesta inválida del backend: "prediction" no es numérico');
+    }
+
+    const grade: AssessmentResult['grade'] =
+      score < THRESHOLD ? 'NO_APTO' : 'APTO_CHOCOLATE';
+
     return {
-      grade: 'APTO_CHOCOLATE',
-      score: prediction,
-      recommendations: [],
+      grade,
+      score,
     };
   },
 };
