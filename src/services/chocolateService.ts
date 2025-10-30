@@ -1,8 +1,39 @@
+// services/chocolateService.ts
 import axios from 'axios';
+import axiosRetry from 'axios-retry';
+import type { AxiosError } from 'axios';
+import { Platform } from 'react-native';
 
-const API_BASE_URL = 'https://catador-project-back.onrender.com/api'
+export const API_BASE_URL =
+  process.env.EXPO_PUBLIC_API_URL ??
+  (__DEV__
+    ? (Platform.OS === 'android'
+        ? 'http://10.0.2.2:8000/api'
+        : 'http://127.0.0.1:8000/api')
+    : 'https://catador-project-back.onrender.com/api');
 
-console.log('[API] BASE_URL =', API_BASE_URL); 
+export const api = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 45000,
+  headers: { 'Content-Type': 'application/json' },
+});
+
+axiosRetry(api, {
+  retries: 2,
+  retryDelay: axiosRetry.exponentialDelay,
+  retryCondition: (error: AxiosError) => {
+    const status = error.response?.status ?? 0;      // 0 si no hay response
+    const isTimeout = error.code === 'ECONNABORTED'; // timeout de axios
+    return (
+      axiosRetry.isNetworkError(error) ||  // sin internet / DNS / CORS
+      axiosRetry.isRetryableError(error) || // 5xx, etc.
+      isTimeout ||
+      status >= 500                         // 5xx explícito
+    );
+  },
+});
+
+console.log('[API] BASE_URL =', API_BASE_URL);
 
 export type AssessmentData = {
   cacaoType: string;
@@ -15,12 +46,6 @@ export type AssessmentResult = {
   score: number;
   recommendations: string[];
 };
-
-const api = axios.create({
-  baseURL: API_BASE_URL,
-  timeout: 15000,
-  headers: { 'Content-Type': 'application/json' },
-});
 
 // Interceptores (útiles para ver TODO lo que sale/entra)
 api.interceptors.request.use((config) => {

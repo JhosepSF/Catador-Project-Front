@@ -16,7 +16,8 @@
       "**/*"
     ],
     "updates": {
-      "fallbackToCacheTimeout": 0
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/2f2d2330-b00c-4de2-9523-800e29738a71"
     },
     "ios": {
       "supportsTablet": true,
@@ -31,6 +32,10 @@
       },
       "edgeToEdgeEnabled": true,
       "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.RECORD_AUDIO",
         "android.permission.CAMERA",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION",
@@ -57,6 +62,9 @@
         "projectId": "2f2d2330-b00c-4de2-9523-800e29738a71"
       }
     },
-    "owner": "jhosepe"
+    "owner": "jhosepe",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    }
   }
 }
