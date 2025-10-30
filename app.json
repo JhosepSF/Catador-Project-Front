@@ -2,7 +2,7 @@
   "expo": {
     "name": "catador-ia",
     "slug": "catador-ia",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -48,15 +48,8 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      [
-        "expo-camera",
-        {
-          "cameraPermission": "Se necesita la cámara para capturar imágenes clínicas."
-        }
-      ],
       "expo-font",
-      "expo-sqlite",
-      "expo-location"
+      "./plugins/withNetworkSecurityConfig.js"
     ],
     "extra": {
       "eas": {
